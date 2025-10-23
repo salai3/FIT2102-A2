@@ -346,25 +346,25 @@ stringTok = tok . string
 -- Parses nonterminal expressions e.g. <expr>
 nonterminal :: Parser String
 nonterminal = do
-  _ <- is '<'                                                         -- parse the opening angle bracket
+  _ <- is '<'                                                         -- discard the opening angle bracket
   name <- some (alpha <|> digit <|> is '_')                           -- parse the name of the nonterminal
-  _ <- is '>'                                                         -- parse the closing angle bracket   
+  _ <- is '>'                                                         -- discard the closing angle bracket   
   return name
 
 -- Parses terminal expressions e.g. "+"
 terminal :: Parser String
 terminal = do
-  _ <- is '"'                                                         -- parse the opening quote
+  _ <- is '"'                                                         -- discard the opening quote
   content <- many (isNot '"')                                         -- parse the content of the terminal
-  _ <- is '"'                                                         -- parse the closing quote
+  _ <- is '"'                                                         -- discard the closing quote
   return content
 
 -- Parses macro expressions e.g. [int], [alpha], [newline]
 macro :: Parser MacroType
 macro = do
-  _ <- is '['                                                         -- parse the opening square bracket
+  _ <- is '['                                                         -- discard the opening square bracket
   macroType <- string "int" <|> string "alpha" <|> string "newline"   -- parse the macro type
-  _ <- is ']'                                                         -- parse the closing square bracket
+  _ <- is ']'                                                         -- discard the closing square bracket
   return $ case macroType of
     "int"     -> IntMacro
     "alpha"   -> AlphaMacro
@@ -388,6 +388,18 @@ alternatives :: Parser [Alternative]
 alternatives = do
     first <- alternative                                              -- parse the first alternative     
     rest <- many (spaces *> is '|' *> spaces *> alternative)          -- used many to allow zero or more additional alternatives if more available
-    return (first : rest)
+    return $ first : rest
 
+-- Parse the ::= separator
+separator :: Parser Char
+separator = spaces *> string "::=" <* spaces
 
+-- Parse the full rule (<name> ::= <alternatives>)
+rule :: Parser Rule
+rule = do
+  _ <- spaces
+  name <- nonterminal                                                 -- Parse <name>
+  _ <- separator                                                      -- Parse ::= separator
+  alts <- alternatives                                                -- Parse alternatives
+  _ <- spaces
+  return $ Rule name alts
