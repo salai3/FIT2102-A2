@@ -359,6 +359,7 @@ terminal = do
   _ <- is '"'                                                         -- parse the closing quote
   return content
 
+-- Parses macro expressions e.g. [int], [alpha], [newline]
 macro :: Parser MacroType
 macro = do
   _ <- is '['                                                         -- parse the opening square bracket
@@ -369,3 +370,24 @@ macro = do
     "alpha"   -> AlphaMacro
     "newline" -> NewlineMacro
     _         -> error "Unrecognized macro type"
+
+-- Elements consist of nonterminals, terminals, and macros
+element :: Parser Element
+element = spaces *> (ntElement <|> tElement <|> mElement) <* spaces   -- discard surrounding spaces and parse the element
+    where
+        ntElement = NonTerminal <$> nonterminal
+        tElement = Terminal <$> terminal
+        mElement = Macro <$> macro
+
+-- An alternative consist of one or more elements
+alternative :: Parser Alternative
+alternative = Alternative <$> some element                            -- used some to ensure at least one element is parsed
+
+-- A list of alternatives separated by '|'
+alternatives :: Parser [Alternative]
+alternatives = do
+    first <- alternative                                              -- parse the first alternative     
+    rest <- many (spaces *> is '|' *> spaces *> alternative)          -- used many to allow zero or more additional alternatives if more available
+    return (first : rest)
+
+

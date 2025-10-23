@@ -2,8 +2,9 @@ module Assignment (bnfParser, generateHaskellCode, validate, ADT, getTime) where
 
 import Instances (Parser (..))
 import Data.Time (formatTime, defaultTimeLocale, getCurrentTime)
-
-
+--------------------------------
+-------- ADT Definition --------
+--------------------------------
 -- BNF Grammar can be represented as one or more "rules"
 -- E.g. "grammar ::= [Rule "number" [...], Rule "expression" [...]]"
 data ADT = Grammar [Rule]
