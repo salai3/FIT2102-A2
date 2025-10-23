@@ -338,3 +338,34 @@ commaTok = charTok ','
 -- True
 stringTok :: String -> Parser String
 stringTok = tok . string
+
+-- | -------------------------------------------------
+-- | -------------- Custom BNF parsers ---------------
+-- | -------------------------------------------------
+
+-- Parses nonterminal expressions e.g. <expr>
+nonterminal :: Parser String
+nonterminal = do
+  _ <- is '<'                                                         -- parse the opening angle bracket
+  name <- some (alpha <|> digit <|> is '_')                           -- parse the name of the nonterminal
+  _ <- is '>'                                                         -- parse the closing angle bracket   
+  return name
+
+-- Parses terminal expressions e.g. "+"
+terminal :: Parser String
+terminal = do
+  _ <- is '"'                                                         -- parse the opening quote
+  content <- many (isNot '"')                                         -- parse the content of the terminal
+  _ <- is '"'                                                         -- parse the closing quote
+  return content
+
+macro :: Parser MacroType
+macro = do
+  _ <- is '['                                                         -- parse the opening square bracket
+  macroType <- string "int" <|> string "alpha" <|> string "newline"   -- parse the macro type
+  _ <- is ']'                                                         -- parse the closing square bracket
+  return $ case macroType of
+    "int"     -> IntMacro
+    "alpha"   -> AlphaMacro
+    "newline" -> NewlineMacro
+    _         -> error "Unrecognized macro type"
