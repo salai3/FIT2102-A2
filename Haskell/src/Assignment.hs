@@ -33,8 +33,14 @@ data Element
 data MacroType = IntMacro | StringMacro | NewlineMacro
     deriving (Show)
 
+-- Parser for the BNF grammar
 bnfParser :: Parser ADT
-bnfParser = pure (TODO "I can change the ADT type however I like")
+bnfParser = do
+    rules <- many ruleParser    -- Parse multiple rules
+    _ <- spaces                 -- Discard any trailing spaces
+    return $ Grammar rules
+where
+    ruleParser = spaces *> rule <* spaces   -- Parse a rule with surrounding spaces (or blank)
 
 generateHaskellCode :: ADT -> String
 generateHaskellCode _ = "-- But I cannot change the type of these three functions."
