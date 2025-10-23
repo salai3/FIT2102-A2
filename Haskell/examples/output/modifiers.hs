@@ -1,0 +1,1 @@
+-- But I cannot change the type of these three functions.
