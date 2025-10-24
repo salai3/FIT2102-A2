@@ -47,8 +47,22 @@ bnfParser = do
     where
         ruleParser = spaces *> rule <* spaces   -- Parse a rule with surrounding spaces (or blank)
 
+-- generateHaskellCode takes an ADT and produces Haskell code as a String
+-- Example output:
+-- imports, data type definitions, parser implementations
+-- runParser :: Show a => Parser a -> String -> String
+-- runParser p s = case parse (p <* eof) s of
+--     Result _ a -> show a
+--     Error _ -> "Parse Error"
+-- 
 generateHaskellCode :: ADT -> String
-generateHaskellCode _ = "-- But I cannot change the type of these three functions."
+generateHaskellCode _ = 
+    typeDefs ++ "\n" ++ parserCode
+    where
+        typeDefs = "-- Haskell data type definitions for the BNF grammar\n" ++
+                   "-- (This is a placeholder. Actual implementation needed.)\n"
+        parserCode = "-- Haskell parser code generated from the BNF grammar\n" ++
+                     "-- (This is a placeholder. Actual implementation needed.)\n"
 
 validate :: ADT -> [String]
 validate _ = ["If i change these function types, I will get a 0 for correctness"]
