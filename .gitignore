@@ -1,3 +1,4 @@
+# Haskell
 dist
 dist-*
 cabal-dev
@@ -21,3 +22,18 @@ cabal.project.local
 cabal.project.local~
 .HTF/
 .ghc.environment.*
+
+# Node.js
+node_modules/
+npm-debug.log
+.env
+dist/
+build/
+*.log
+coverage/
+
+# OS-specific
+.DS_Store
+
+# Editor-specific
+.vscode/
