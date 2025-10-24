@@ -1,6 +1,7 @@
 module Assignment (bnfParser, generateHaskellCode, validate, ADT, getTime) where
 
 import Instances (Parser (..))
+import Parser (Parser, is, isNot, string, spaces, alpha, digit, (<|>), some, many)
 import Data.Time (formatTime, defaultTimeLocale, getCurrentTime)
 
 -- | -------------------------------------------------
