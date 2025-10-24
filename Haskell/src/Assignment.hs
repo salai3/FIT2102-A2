@@ -1,73 +1,9 @@
 module Assignment (bnfParser, generateHaskellCode, validate, ADT, getTime) where
 
 import Instances (Parser (..))
-import Parser (Parser, is, isNot, string, spaces, alpha, digit, (<|>), some, many)
+import Parser (is, isNot, string, spaces, alpha, digit)
+import Control.Applicative (many, some, (<|>))
 import Data.Time (formatTime, defaultTimeLocale, getCurrentTime)
-
--- | -------------------------------------------------
--- | -------------- Custom BNF parsers ---------------
--- | -------------------------------------------------
-
--- Parses nonterminal expressions e.g. <expr>
-nonterminal :: Parser String
-nonterminal = do
-  _ <- is '<'                                                         -- discard the opening angle bracket
-  name <- some (alpha <|> digit <|> is '_')                           -- parse the name of the nonterminal
-  _ <- is '>'                                                         -- discard the closing angle bracket   
-  return name
-
--- Parses terminal expressions e.g. "+"
-terminal :: Parser String
-terminal = do
-  _ <- is '"'                                                         -- discard the opening quote
-  content <- many (isNot '"')                                         -- parse the content of the terminal
-  _ <- is '"'                                                         -- discard the closing quote
-  return content
-
--- Parses macro expressions e.g. [int], [alpha], [newline]
-macro :: Parser MacroType
-macro = do
-  _ <- is '['                                                         -- discard the opening square bracket
-  macroType <- string "int" <|> string "alpha" <|> string "newline"   -- parse the macro type
-  _ <- is ']'                                                         -- discard the closing square bracket
-  return $ case macroType of
-    "int"     -> IntMacro
-    "alpha"   -> AlphaMacro
-    "newline" -> NewlineMacro
-    _         -> error "Unrecognized macro type"
-
--- Elements consist of nonterminals, terminals, and macros
-element :: Parser Element
-element = spaces *> (ntElement <|> tElement <|> mElement) <* spaces   -- discard surrounding spaces and parse the element
-    where
-        ntElement = NonTerminal <$> nonterminal
-        tElement = Terminal <$> terminal
-        mElement = Macro <$> macro
-
--- An alternative consist of one or more elements
-alternative :: Parser Alternative
-alternative = Alternative <$> some element                            -- used some to ensure at least one element is parsed
-
--- A list of alternatives separated by '|'
-alternatives :: Parser [Alternative]
-alternatives = do
-    first <- alternative                                              -- parse the first alternative     
-    rest <- many (spaces *> is '|' *> spaces *> alternative)          -- used many to allow zero or more additional alternatives if more available
-    return $ first : rest
-
--- Parse the ::= separator
-separator :: Parser Char
-separator = spaces *> string "::=" <* spaces
-
--- Parse the full rule (<name> ::= <alternatives>)
-rule :: Parser Rule
-rule = do
-  _ <- spaces
-  name <- nonterminal                                                 -- Parse <name>
-  _ <- separator                                                      -- Parse ::= separator
-  alts <- alternatives                                                -- Parse alternatives
-  _ <- spaces
-  return $ Rule name alts
 
 
 --------------------------------
@@ -118,3 +54,65 @@ validate _ = ["If i change these function types, I will get a 0 for correctness"
 
 getTime :: IO String
 getTime = formatTime defaultTimeLocale "%Y-%m-%dT%H-%M-%S" <$> getCurrentTime
+
+
+-- | -------------------------------------------------
+-- | -------------- Custom BNF parsers ---------------
+-- | -------------------------------------------------
+
+-- Parses nonterminal expressions e.g. <expr>
+nonterminal :: Parser String
+nonterminal = do
+  _ <- is '<'                                                         -- discard the opening angle bracket
+  name <- some (alpha <|> digit <|> is '_')                           -- parse the name of the nonterminal
+  _ <- is '>'                                                         -- discard the closing angle bracket   
+  return name
+
+-- Parses terminal expressions e.g. "+"
+terminal :: Parser String
+terminal = do
+  _ <- is '"'                                                         -- discard the opening quote
+  content <- many (isNot '"')                                         -- parse the content of the terminal
+  _ <- is '"'                                                         -- discard the closing quote
+  return content
+
+-- Parses macro expressions e.g. [int], [alpha], [newline]
+macro :: Parser MacroType
+macro = do
+  _ <- is '['                                                         -- discard the opening square bracket
+  macroType <- string "int" <|> string "alpha" <|> string "newline"   -- parse the macro type
+  _ <- is ']'                                                         -- discard the closing square bracket
+  return $ case macroType of
+    "int"     -> IntMacro
+    "alpha"   -> StringMacro
+    "newline" -> NewlineMacro
+    _         -> error "Unrecognized macro type"
+
+-- Elements consist of nonterminals, terminals, and macros
+element :: Parser Element
+element = spaces *> (ntElement <|> tElement <|> mElement) <* spaces   -- discard surrounding spaces and parse the element
+    where
+        ntElement = NonTerminal <$> nonterminal
+        tElement = Terminal <$> terminal
+        mElement = Macro <$> macro
+
+-- An alternative consist of one or more elements
+alternative :: Parser Alternative
+alternative = Alternative <$> some element                            -- used some to ensure at least one element is parsed
+
+-- A list of alternatives separated by '|'
+alternatives :: Parser [Alternative]
+alternatives = do
+    first <- alternative                                              -- parse the first alternative     
+    rest <- many (spaces *> is '|' *> spaces *> alternative)          -- used many to allow zero or more additional alternatives if more available
+    return $ first : rest
+
+-- Parse the full rule (<name> ::= <alternatives>)
+rule :: Parser Rule
+rule = do
+  _ <- spaces
+  name <- nonterminal                                                 -- Parse <name>
+  _ <- spaces *> string "::=" <* spaces                               -- Parse ::= separator
+  alts <- alternatives                                                -- Parse alternatives
+  _ <- spaces
+  return $ Rule name alts
