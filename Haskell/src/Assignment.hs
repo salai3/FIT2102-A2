@@ -1,7 +1,7 @@
 module Assignment (bnfParser, generateHaskellCode, validate, ADT, getTime) where
 
 import Instances (Parser (..))
-import Parser (is, isNot, string, spaces, alpha, digit)
+import Parser (is, isNot, string, spaces, alpha, digit, eof)
 import Control.Applicative (many, some, (<|>))
 import Data.Time (formatTime, defaultTimeLocale, getCurrentTime)
 
@@ -42,6 +42,7 @@ bnfParser :: Parser ADT
 bnfParser = do
         rules <- many ruleParser    -- Parse multiple rules
         _ <- spaces                 -- Discard any trailing spaces
+        _ <- eof                    -- Ensure we reach the end of input
         return $ Grammar rules
     where
         ruleParser = spaces *> rule <* spaces   -- Parse a rule with surrounding spaces (or blank)
