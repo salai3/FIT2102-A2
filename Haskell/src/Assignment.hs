@@ -150,8 +150,7 @@ generateHaskellCode :: ADT -> String
 generateHaskellCode (Grammar rules) = 
     typeDefs ++ "\n" ++ parserDefs
     where
-        typeDefs = "-- Haskell data type definitions for the BNF grammar\n" ++
-                   "-- (This is a placeholder. Actual implementation needed.)\n"
+        typeDefs = generateTypes rules
         parserDefs = "-- Haskell parser code generated from the BNF grammar\n" ++
                      "-- (This is a placeholder. Actual implementation needed.)\n"
 
