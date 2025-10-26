@@ -51,18 +51,22 @@ bnfParser = do
 --------------------------------
 ------- Helper functions -------
 --------------------------------
+-- Checks if a list has exactly one element
 isSingle :: [a] -> Bool
 isSingle [_] = True
 isSingle _ = False
 
+-- Capitalizes the first letter of a string
 capitalize :: String -> String
 capitalize "" = ""
 capitalize (x:xs) = toUpper x : xs
 
+-- Uncapitalizes the first letter of a string
 uncapitalize :: String -> String
 uncapitalize "" = ""
 uncapitalize (c:cs) = toLower c : cs
 
+-- Generates the parser code for a given element
 elementParser :: Element -> String
 elementParser (NonTerminal n) = uncapitalize n
 elementParser (Terminal s) = "(string " ++ show s ++ ")"
@@ -70,6 +74,7 @@ elementParser (Macro IntMacro) = "int"
 elementParser (Macro StringMacro) = "(some alpha)"
 elementParser (Macro NewlineMacro) = "(is '\\n')"
 
+-- Gets the Haskell type for a given element
 elementType :: Element -> String
 elementType (NonTerminal n) = capitalize n
 elementType (Terminal _) = "String"
@@ -96,15 +101,21 @@ generateConstructor typeName index (Alternative elements) =
 --                 | Expression2 Term String Expression
 --     deriving (Show)
 generateData :: Rule -> String
-generateData (Rule name alternatives) = 
-        "data " ++ typeName ++ " = " ++ firstConstructor ++ "\n" ++ restConstructors ++ "\n" ++
-        "    deriving (Show)\n"
+generateData (Rule name alts) = 
+    case alts of
+        [] -> error "generateData: Invalid Alternatives"
+        (first:rest) -> 
+            "data " ++ typeName ++ " = " ++ firstConstructor ++ "\n" ++
+            restConstructors ++ "\n" ++
+            "    deriving (Show)\n"
     where
         typeName = capitalize name
-        firstConstructor = generateConstructor typeName 1 $ head alternatives           --Generate the first constructor without the "|" operator
-        restConstructors = concatMap
-            (\(i, alt) -> "                | " ++ generateConstructor typeName i alt)
-            (zip [2..] (tail alternatives))                                             --For each alternative after the first, generate a constructor with the "|" operator prefixed onto it
+        firstConstructor = generateConstructor typeName 1 $ head alts           --Generate the first constructor without the "|" operator
+        restConstructors = case alts of
+            [] -> ""
+            (_:rest) -> concatMap
+                (\(i, alt) -> "                | " ++ generateConstructor typeName i alt ++ "\n")
+                (zip [2..] rest)                                             --For each alternative after the first, generate a constructor with the "|" operator prefixed onto it
 
 -- Generates a Haskell newtype for a single alternative consisting of a single element
 -- Convert "number", [ Alternative [ Macro IntMacro ] ] to
@@ -112,7 +123,12 @@ generateData (Rule name alternatives) =
 --    deriving (Show)
 generateNewType :: Rule -> String
 generateNewType (Rule name [Alternative [element]]) = 
-        "newtype " ++ capitalize name ++ " = " ++ capitalize name ++ " " ++ elementType element ++ "\n" ++ "    deriving (Show)\n"
+        "newtype " ++ typeName ++ " = " ++ typeName ++
+        " " ++ elementType element ++ "\n" ++
+        "    deriving (Show)\n"
+    where
+        typeName = capitalize name
+generateNewType _ = error "generateNewType: Invalid Rule"
 
 -- For a single rule, generate the corresponding Haskell type definition
 -- Convert Rule "number" [ Alternative [ Macro IntMacro ] ] to
@@ -140,8 +156,8 @@ generateType rule@(Rule _ alternatives)
 -- Example Output:
 -- newtype Number = Number Int
 --     deriving (Show)
-generateTypes :: ADT -> String
-generateTypes (Grammar rules) = unlines $ map generateType rules -- Unlines takes a list of strings and concatenates them with newline characters
+generateTypes :: [Rule] -> String
+generateTypes rules = unlines $ map generateType rules -- Unlines takes a list of strings and concatenates them with newline characters
 
 
 ---------------------------------------
@@ -152,7 +168,7 @@ generateTypes (Grammar rules) = unlines $ map generateType rules -- Unlines take
 -- Example: Name: Expression, Alternative Index: 2, Alternative: [ NonTerminal "number", Terminal "+", NonTerminal "expression" ] to
 -- "Expression2 <$> number <*> (string "+") <*> expression"
 generateDataParser :: String -> Int -> Alternative -> String
-generateDataParser typeName index [] = error "Alternative is empty"      --Should never be called with an empty alternative, but just in case
+generateDataParser _ _ (Alternative []) = error "generateDataParser: Alternative is empty"
 generateDataParser typeName index (Alternative (element:rest)) =
     typeName ++ show index ++ " <$> " ++ elementParser element ++ concatMap (\e -> " <*> " ++ elementParser e) rest
     
@@ -162,16 +178,17 @@ generateDataParser typeName index (Alternative (element:rest)) =
 generateNewTypeParser :: String -> Alternative -> String
 generateNewTypeParser typeName (Alternative [element]) = 
         typeName ++ " <$> " ++ elementParser element
+generateNewTypeParser _ _ = error "generateNewTypeParser: Invalid Alternative"
 
 -- Generates parser code for all alternatives in a rule
 -- Example: Name: Expression, Alternative Index: 2, Alternative: [ NonTerminal "number", Terminal "+", NonTerminal "expression" ] to
 -- "Expression2 <$> number <*> (string \"+\") <*> expression"
 generateAlternativeParser :: String -> Int -> Alternative -> String
-generateAlternativeParser typeName index (Alternative elements) =
+generateAlternativeParser typeName index alternative@(Alternative elements) =
     if isSingle elements then
-        generateNewTypeParser typeName elements
+        generateNewTypeParser typeName alternative
     else
-        generateDataParser typeName index elements
+        generateDataParser typeName index alternative
 
 -- Generates parser code for all alternatives in a rule
 -- Example: Name: Rule "Expression" Alternatives: [ Alternative [ NonTerminal "term" ], Alternative [ NonTerminal "term", Terminal "+", NonTerminal "expression" ] ] to
@@ -186,6 +203,7 @@ generateAlternatives (Rule name (alternative:rest)) =
     concatMap
         (\(i, alt) -> "    <|> " ++ generateAlternativeParser name i alt ++ "\n")
         (zip [2..] rest)
+generateAlternatives _ = error "generateAlternatives: Invalid Rule"
 
 -- Generates a Haskell parser function for a single rule
 -- Example: Rule "number" [Alternative [Macro IntMacro]] to
@@ -194,9 +212,10 @@ generateAlternatives (Rule name (alternative:rest)) =
 generateParser :: Rule -> String
 generateParser (Rule name alternatives) = 
         uncapitalize name ++ " :: Parser " ++ typeName ++ "\n" ++
-        uncapitalize name ++ " = " ++ generateAlternatives $ Rule typeName alternatives
+        uncapitalize name ++ " = " ++ alts
     where
         typeName = capitalize name
+        alts = generateAlternatives (Rule typeName alternatives)
 
 
 -- Generates parser functions for all rules
