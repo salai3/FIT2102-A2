@@ -4,7 +4,7 @@ import Instances (Parser (..))
 import Parser (is, isNot, string, spaces, alpha, digit, eof)
 import Control.Applicative (many, some, (<|>))
 import Data.Time (formatTime, defaultTimeLocale, getCurrentTime)
-import Data.Char (toUpper)
+import Data.Char (toUpper, toLower)
 
 
 --------------------------------
@@ -51,17 +51,36 @@ bnfParser = do
 --------------------------------
 ------- Helper functions -------
 --------------------------------
-isSingleMacro :: [Alternative] -> Bool
-isSingleMacro [Alternative [_]] = True
-isSingleMacro _ = False
+isSingle :: [a] -> Bool
+isSingle [[_]] = True
+isSingle _ = False
 
 capitalize :: String -> String
 capitalize "" = ""
 capitalize (x:xs) = toUpper x : xs
 
+uncapitalize :: String -> String
+uncapitalize "" = ""
+uncapitalize (c:cs) = toLower c : cs
+
+returnElementParser :: Element -> String
+returnElementParser (Nonterminal n) = uncapitalize n
+returnElementParser (Terminal s) = "(string " ++ show s ++ ")"
+returnElementParser (Macro IntMacro) = "int"
+returnElementParser (Macro AlphaMacro) = "(some alpha)"
+returnElementParser (Macro NewlineMacro) = "(is '\\n')"
+
+returnElementType :: Element -> String
+returnElementType (Nonterminal n) = capitalize n
+returnElementType (Terminal _) = "String"
+returnElementType (Macro IntMacro) = "Int"
+returnElementType (Macro AlphaMacro) = "String"
+returnElementType (Macro NewlineMacro) = "Char"
+
 
 ---------------------------------------
 ------- Haskell Code Generation -------
+---------- Type Definitions -----------
 ---------------------------------------
 
 -- Generates a Haskell type constructor for a given alternative
@@ -69,21 +88,15 @@ capitalize (x:xs) = toUpper x : xs
 -- Expression2 Number String Expression
 generateConstructor :: String -> Int -> Alternative -> String
 generateConstructor typeName index (Alternative elements) =
-    typeName ++ show index ++ " " ++ concatMap (\e -> " " ++ elementType e) elements --For each alternative, increment name by 1 (e.g., Expr1, Expr2, etc. ) and then list the types of its elements
-    where
-        elementType (NonTerminal n) = capitalize n
-        elementType (Terminal _) = "String"
-        elementType (Macro IntMacro) = "Int"
-        elementType (Macro StringMacro) = "String"
-        elementType (Macro NewlineMacro) = "Char"
+    typeName ++ show index ++ " " ++ concatMap (\e -> " " ++ returnElementType e) elements --For each alternative, increment name by 1 (e.g., Expr1, Expr2, etc. ) and then list the types of its elements
 
 -- Generates an Haskell data type with one or more alternatives, each with a unique name and constructor
 -- Converts inputs:Name: expression, Alternatives: [ Alternative [ NonTerminal "term" ], Alternative [ NonTerminal "term", Terminal "+", NonTerminal "expression" ] ]
 -- data Expression = Expression1 Term
 --                 | Expression2 Term String Expression
 --    deriving (Show)
-generateData :: String -> [Alternative] -> String
-generateData name alternatives = 
+generateData :: Rule -> String
+generateData (Rule name alternatives) = 
         "data " ++ typeName ++ " = " ++ firstConstructor ++ "\n" ++ restConstructors ++ "\n" ++
         "    deriving (Show)\n"
     where
@@ -94,18 +107,12 @@ generateData name alternatives =
             (zip [2..] (tail alternatives)) --For each alternative after the first, generate a constructor with the "|" operator prefixed onto it
 
 -- Generates a Haskell newtype for a single alternative consisting of a single element
--- Convert <number> ::= [int] to
+-- Convert "number", [ Alternative[ Macro IntMacro ] ] to
 -- newtype Number = Number Int
 --    deriving (Show)
-generateNewType :: String -> [Alternative] -> String
-generateNewType name [Alternative [element]] = 
-        "newtype" ++ capitalize name ++ " = " ++ capitalize name ++ " " ++ elementType element ++ "\n" ++ "    deriving (Show)\n"
-    where
-        elementType (NonTerminal n) = capitalize n
-        elementType (Terminal _) = "String"
-        elementType (Macro IntMacro) = "Int"
-        elementType (Macro StringMacro) = "String"
-        elementType (Macro NewlineMacro) = "Char"
+generateNewType :: Rule -> String
+generateNewType (Rule name [Alternative [element]]) = 
+        "newtype" ++ capitalize name ++ " = " ++ capitalize name ++ " " ++ returnElementType element ++ "\n" ++ "    deriving (Show)\n"
 
 -- For a single rule, generate the corresponding Haskell type definition
 -- Convert Rule "number" [ Alternative[ Macro IntMacro ] ] to
@@ -117,28 +124,93 @@ generateNewType name [Alternative [element]] =
 --                 | Expression2 Number String Expression
 --   deriving Show
 generateType :: Rule -> String
-generateType (Rule name alternatives)
-    | isSingleMacro alternatives = generateNewType name alternatives
-    | otherwise = generateData name alternatives
+generateType rule@(Rule _ alternatives) 
+    | isSingleMacro alternatives = generateNewType rule
+    | otherwise = generateData rule
 
--- generateTypes takes a list of ADT rules and produces Haskell code as a String
+-- generateTypes takes a list of Grammar rules and produces Haskell code as a String
 generateTypes :: [Rule] -> String
 generateTypes rules = unlines $ map generateType rules -- Unlines takes a list of strings and concatenates them with newline characters
 
 
--- generateHaskellCode takes an ADT and produces Haskell code as a String
--- Example output:
--- imports, data type definitions, parser implementations
--- runParser :: Show a => Parser a -> String -> String
--- runParser p s = case parse (p <* eof) s of
---     Result _ a -> show a
---     Error _ -> "Parse Error"
--- 
---Example BNF Grammar:
+---------------------------------------
+------- Haskell Code Generation -------
+--------- Parser Definitions ----------
+---------------------------------------
+-- Generates a Haskell parser function for a data type alternative consisting of multiple elements
+-- Example: Name: Expression, Alternative Index: 2, Alternative: [ NonTerminal "number", Terminal "+", NonTerminal "expression" ] to
+-- "Expression2 <$> number <*> (string "+") <*> expression"
+generateDataParser :: String -> Int -> Alternative -> String
+generateDataParser typeName index [] = typeName ++ show index
+generateDataParser typeName index (element:rest) =
+    typeName ++ show index ++ " <$> " ++ elementParser element ++ concatMap (\e -> " <*> " ++ elementParser e) rest
+    
+-- Generates a Haskell parser specifically for a newtype alternative consisting of a single element
+-- Example: Name: number, Alternative: [ Macro IntMacro ] to
+-- number = Number <$> int
+generateNewTypeParser :: String -> Alternative -> String
+generateNewTypeParser typeName (Alternative [element]) = 
+        typeName ++ " <$> " ++ elementParser element
+-- Generates a Haskell parser function for a single alternative
+-- Example: Name: Expression, Alternative Index: 2, Alternative: [ NonTerminal "number", Terminal "+", NonTerminal "expression" ] to
+-- "Expression2 <$> number <*> (string \"+\") <*> expression"
+generateAlternativeParser :: String -> Int -> Alternative -> String
+generateAlternativeParser typeName index (Alternative elements) =
+    if isSingle elements then
+        generateNewTypeParser typeName elements
+    else
+        generateDataParser typeName index elements
+
+-- Parses multiple alternatives to the generateAlternativeParser function
+-- Example: Name: Expression, Alternatives: [ Alternative [ NonTerminal "term" ], Alternative [ NonTerminal "term", Terminal "+", NonTerminal "expression" ] ] to
+-- "Expression1 <$> termParser
+--     <|> Expression2 <$> termParser <*> (string "+") <*> expressionParser"
+generateAlternatives :: Rule -> String
+generateAlternatives (Rule name [alternative]) =
+    generateAlternativeParser name 1 alternative ++ "\n"
+
+generateAlternatives (Rule name (alternative:rest)) =
+    generateAlternativeParser name 1 alternative ++ "\n" ++
+    concatMap
+        (\(i, alt) -> "    <|> " ++ generateAlternativeParser name i alt ++ "\n")
+        (zip [2..] rest)
+
+-- Generates a Haskell parser function for a single rule
+-- Example: Rule "number" [Alternative [Macro IntMacro]] to
+-- number :: Parser Number
+-- number = Number <$> int
+generateParser :: Rule -> String
+generateParser (Rule name alternatives) = 
+        uncapitalize name ++ " :: Parser " ++ typeName ++ "\n" ++
+        uncapitalize name ++ " = " ++ generateAlternatives $ Rule typeName alternatives
+    where
+        typeName = capitalize name
+
+
+-- Accepts a list of Grammar rules and produces Haskell parser code as a String
+-- [ Rule "number" [Alternative [Macro IntMacro]]
+-- , Rule "expression" 
+--     [ Alternative [Nonterminal "number"]
+--     , Alternative [Nonterminal "number", Terminal "+", Nonterminal "expression"]
+--     ]
+-- ] to
+-- number :: Parser Number
+-- number = Number <$> int
+--
+-- expression :: Parser Expression
+-- expression = Expression1 <$> number
+--              <|> Expression2 <$> number <*> (string "+") <*> expression
+generateParsers :: [Rule] -> String
+generateParsers rules = unlines (map generateParser rules)
+
+
+-- generateHaskellCode takes the Grammar Rules formed by the BNF and produces Haskell code as a String
+--
+-- Example BNF Grammar:
 -- <number> ::= [int]
 -- <expression> ::= <number> | <number> "+" <expression>
 --
--- to ADT:
+-- to Grammar:
 -- Grammar 
 --   [ Rule "number" 
 --       [Alternative [Macro IntMacro]]
@@ -146,13 +218,17 @@ generateTypes rules = unlines $ map generateType rules -- Unlines takes a list o
 --       [Alternative [Nonterminal "number"],
 --        Alternative [Nonterminal "number", Terminal "+", Nonterminal "expression"]]
 --   ]
+
+-- Example output:
+-- expression :: Parser Expression
+-- expression = Expression1 <$> number
+--              <|> Expression2 <$> number <*> (string "+") <*> expression
 generateHaskellCode :: ADT -> String
 generateHaskellCode (Grammar rules) = 
     typeDefs ++ "\n" ++ parserDefs
     where
         typeDefs = generateTypes rules
-        parserDefs = "-- Haskell parser code generated from the BNF grammar\n" ++
-                     "-- (This is a placeholder. Actual implementation needed.)\n"
+        parserDefs = generateParsers rules
 
 validate :: ADT -> [String]
 validate _ = ["If i change these function types, I will get a 0 for correctness"]
