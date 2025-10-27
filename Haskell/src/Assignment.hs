@@ -31,6 +31,15 @@ data Element
     = Terminal String
     | NonTerminal String
     | Macro MacroType
+    | Modified Modifier Element     --Elements can be wrapped with a modifier
+    deriving (Show)
+
+-- Part C: Extended Elements with Modifiers
+data Modifier
+    = TokModifier           --(Tok) Remove trailing whitespace
+    | StarModifier          --(*) Zero or more
+    | PlusModifier          --(+) One or more
+    | QuestionModifier      --(?) Zero or one (optional)
     deriving (Show)
 
 -- Macros allow to differentiate special elements in the grammar, e.g. integers, strings, newlines
@@ -108,14 +117,12 @@ generateData (Rule name alts) =
             "data " ++ typeName ++ " = " ++ firstConstructor ++ "\n" ++
             restConstructors ++
             "    deriving Show"
-    where
-        typeName = capitalize name
-        firstConstructor = generateConstructor typeName 1 $ head alts           --Generate the first constructor without the "|" operator
-        restConstructors = case alts of
-            [] -> ""
-            (first:rest) -> concatMap
-                (\(i, alt) -> "          | " ++ generateConstructor typeName i alt ++ "\n")
-                (zip [2..] rest)                                             --For each alternative after the first, generate a constructor with the "|" operator prefixed onto it
+            where
+                typeName = capitalize name
+                firstConstructor = generateConstructor typeName 1 first           --Generate the first constructor without the "|" operator
+                restConstructors = concatMap
+                    (\(i, alt) -> "          | " ++ generateConstructor typeName i alt ++ "\n")
+                    (zip [2..] rest)                                             --For each alternative after the first, generate a constructor with the "|" operator prefixed onto it
 
 -- Generates a Haskell newtype for a single alternative consisting of a single element
 -- Convert "number", [ Alternative [ Macro IntMacro ] ] to
@@ -270,12 +277,6 @@ generateHaskellCode (Grammar rules) =
         typeDefs = generateTypes rules
         parserDefs = generateParsers rules
 
-validate :: ADT -> [String]
-validate _ = ["If i change these function types, I will get a 0 for correctness"]
-
-getTime :: IO String
-getTime = formatTime defaultTimeLocale "%Y-%m-%dT%H-%M-%S" <$> getCurrentTime
-
 
 -- | -------------------------------------------------
 -- | -------------- Custom BNF parsers ---------------
@@ -311,8 +312,15 @@ macro = do
 
 -- Elements consist of nonterminals, terminals, and macros
 element :: Parser Element
-element = inlineSpaces *> (ntElement <|> tElement <|> mElement) <* inlineSpaces   -- discard surrounding spaces and parse the element
+element = inlineSpaces *> modifiedElement <* inlineSpaces   -- discard surrounding spaces and parse the element
     where
+        modifiedElement = do
+            elem <- elementTypes
+            modifier <- optional modifierParser             -- Then check for an optional modifier
+            case modifier of
+                Nothing -> return elem
+                Just mod -> return $ Modified mod elem
+        elementTypes = ntElement <|> tElement <|> mElement  -- Attempts each of the basic element types
         ntElement = NonTerminal <$> nonterminal
         tElement = Terminal <$> terminal
         mElement = Macro <$> macro
@@ -334,3 +342,19 @@ rule = do
   name <- nonterminal                                                 -- Parse <name>
   _ <- inlineSpaces *> string "::=" <* inlineSpaces                   -- Parse ::= separator
   Rule name <$> alternatives                                           -- construct Rule using applicative style
+
+-- | -------------------------------------------------
+-- | -------------- Modifier Parsers -----------------
+-- | -------------------------------------------------
+-- Attempts to pattern match the next char and returns the appropriate type of Modifier
+modifierParser :: Parser Modifier
+modifierParser =
+    (is '*' >> return StarModifier) <|> 
+    (is '+' >> return PlusModifier) <|> 
+    (is '?' >> return QuestionModifier)
+
+validate :: ADT -> [String]
+validate _ = ["If i change these function types, I will get a 0 for correctness"]
+
+getTime :: IO String
+getTime = formatTime defaultTimeLocale "%Y-%m-%dT%H-%M-%S" <$> getCurrentTime
