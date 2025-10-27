@@ -1,8 +1,8 @@
 module Assignment (bnfParser, generateHaskellCode, validate, ADT(..), Rule(..), Alternative(..), Element(..), MacroType(..), getTime) where
 
 import Instances (Parser (..))
-import Parser (is, isNot, string, spaces, alpha, digit, eof, inlineSpaces)
-import Control.Applicative (many, some, (<|>))
+import Parser (is, isNot, string, spaces, alpha, digit, eof, inlineSpaces, lower)
+import Control.Applicative (many, some, (<|>), optional)
 import Data.Time (formatTime, defaultTimeLocale, getCurrentTime)
 import Data.Char (toUpper, toLower)
 
@@ -17,7 +17,10 @@ data ADT = Grammar [Rule]
 
 -- Each rule is defined by a name and a list of alternatives (expressions containing their Terminals and Non-terminals values)
 -- E.g. "rule ::= Rule "number" [Alternative [...], Alternative [...]]" or "rule ::= Rule "expression" [Alternative [...], Alternative [...]]"
-data Rule = Rule String [Alternative]
+-- Added polymorphism:
+-- Accepts a list of type parameters after the name of the rule
+-- E.g. "rule ::= Rule "list" ["a"] [Alternative [...], Alternative [...]]"
+data Rule = Rule String [String] [Alternative]
     deriving (Show)
 
 -- An alternative is a sequence of elements (Terminals and Non-terminals)
@@ -32,6 +35,8 @@ data Element
     | NonTerminal String
     | Macro MacroType
     | Modified Modifier Element     --Elements can be wrapped with a modifier
+    | ParameterRef String
+    | ParameterizedCall String [Element]
     deriving (Show)
 
 -- Part C: Extended Elements with Modifiers
@@ -72,13 +77,17 @@ elementParser (Terminal s) = "(string " ++ show s ++ ")"
 elementParser (Macro IntMacro) = "int"
 elementParser (Macro StringMacro) = "(some alpha)"
 elementParser (Macro NewlineMacro) = "(is '\\n')"
-elementParser (Modified StarModifier e) = "many (" ++ elementParser e ++ ")"
-elementParser (Modified PlusModifier e) = "some (" ++ elementParser e ++ ")"
-elementParser (Modified QuestionModifier e) = "optional (" ++ elementParser e ++ ")"
-elementParser (Modified TokModifier e) =
-    case e of
-        Terminal s -> "(stringTok " ++ show s ++ ")"    --Example: (Modified TokModifier (Terminal "+")) to (stringTok "+")
-        _ -> "(tok " ++ elementParser e ++ ")"          --Example: (Modified TokModifier (NonTerminal "number")) to (tok number)
+elementParser (Modified mod elem) = modifiedParser mod elem
+elementParser (ParameterRef param) = param
+elementParser (ParameterizedCall name args) =
+    "(" ++ uncapitalize name ++ " " ++ unwords (map elementParser args) ++ ")"
+
+-- Gets the parser code for a given modifier and element
+modifiedParser :: Modifier -> Element -> String
+modifiedParser StarModifier e = "many (" ++ elementParser e ++ ")"
+modifiedParser PlusModifier e = "some (" ++ elementParser e ++ ")"
+modifiedParser QuestionModifier e = "optional (" ++ elementParser e ++ ")"
+modifiedParser TokModifier e = "(tok " ++ elementParser e ++ ")"
 
 -- Gets the Haskell type for a given element
 elementType :: Element -> String
@@ -87,10 +96,15 @@ elementType (Terminal _) = "String"
 elementType (Macro IntMacro) = "Int"
 elementType (Macro StringMacro) = "String"
 elementType (Macro NewlineMacro) = "Char"
+-- Modifiers
 elementType (Modified StarModifier e) = "[" ++ elementType e ++ "]"
 elementType (Modified PlusModifier e) = "[" ++ elementType e ++ "]"
-elementType (Modified QuestionModifier e) = "Maybe (" ++ elementType e ++ ")"
+elementType (Modified QuestionModifier e) = "Maybe " ++ elementType e
 elementType (Modified TokModifier e) = elementType e
+-- Parameterization
+elementType (ParameterRef param) = param
+elementType (ParameterizedCall name args) =
+    capitalize name ++ " " ++ unwords (map elementType args)
 
 
 ---------------------------------------
@@ -111,15 +125,16 @@ generateConstructor typeName index (Alternative elements) =
 --                 | Expression2 Term String Expression
 --     deriving Show
 generateData :: Rule -> String
-generateData (Rule name alts) =
+generateData (Rule name params alts) =
     case alts of
         [] -> error "generateData: Invalid Alternatives"
         (first:rest) ->
-            "data " ++ typeName ++ " = " ++ firstConstructor ++ "\n" ++
+            "data " ++ typeName ++ typeParams ++ " = " ++ firstConstructor ++ "\n" ++
             restConstructors ++
             "    deriving Show"
             where
                 typeName = capitalize name
+                typeParams = if null params then "" else " " ++ unwords params
                 firstConstructor = generateConstructor typeName 1 first           --Generate the first constructor without the "|" operator
                 restConstructors = concatMap
                     (\(i, alt) -> "          | " ++ generateConstructor typeName i alt ++ "\n")
@@ -130,13 +145,34 @@ generateData (Rule name alts) =
 -- newtype Number = Number Int
 --    deriving Show
 generateNewType :: Rule -> String
-generateNewType (Rule name [Alternative [element]]) =
-        "newtype " ++ typeName ++ " = " ++ typeName ++
+generateNewType (Rule name params [Alternative [element]]) =
+        "newtype " ++ typeName ++ typeParams ++ " = " ++ typeName ++
         " " ++ elementType element ++ "\n" ++
         "    deriving Show"
     where
         typeName = capitalize name
+        typeParams = if null params then "" else " " ++ unwords params
 generateNewType _ = error "generateNewType: Invalid Rule"
+
+-- Generates a Haskell parameterized data type with one or more alternatives
+-- Converts inputs:Name: list, Params: ["a"], Alternatives: [ Alternative [ ParameterRef "a" ], Alternative [ ParameterRef "a", Terminal ",", ParameterizedCall "list" ["a"] ] ]
+-- data List a = List1 a
+--              | List2 a String (List a)
+--     deriving Show
+generateParameterizedData :: String -> [String] -> [Alternative] -> String
+generateParameterizedData name params alts =
+    "data " ++ typeName ++ " " ++ typeParams ++ " = " ++ constructors ++ "\n" ++
+    "    deriving Show"
+    where
+        typeName = capitalize name
+        typeParams = unwords params
+        constructors = case alts of
+            [] -> error "generateParameterizedData: Invalid Alternatives"
+            (first:rest) ->
+                generateConstructor typeName 1 first ++
+                concatMap (\(i, alt) -> "\n          | " ++ 
+                    generateConstructor typeName i alt) 
+                    (zip [2..] rest)
 
 -- For a single rule, generate the corresponding Haskell type definition
 -- Convert Rule "number" [ Alternative [ Macro IntMacro ] ] to
@@ -148,10 +184,11 @@ generateNewType _ = error "generateNewType: Invalid Rule"
 --                 | Expression2 Number String Expression
 --   deriving Show
 generateType :: Rule -> String
-generateType rule@(Rule _ [Alternative elements])
-    | isSingle elements = generateNewType rule  -- Single alternative with single element -> newtype
-    | otherwise = generateData rule              -- Single alternative with multiple elements -> data
-generateType rule = generateData rule            -- Multiple alternatives -> data
+generateType rule@(Rule name params [Alternative elements])
+    | null params && isSingle elements = generateNewType rule      -- Single alternative with single element -> newtype
+    | otherwise = generateData rule                 -- Single alternative with multiple elements -> data
+
+generateType rule = generateData rule               -- Multiple alternatives -> data
 
 -- generateTypes takes a list of Grammar rules and produces Haskell type definitions as a String
 -- Example Input:
@@ -200,18 +237,30 @@ generateAlternativeParser typeName index (Alternative [element]) =
 generateAlternativeParser typeName index alternative =
     generateDataParser typeName index alternative
 
+generateParameterizedParser :: String -> [String] -> [Alternative] -> String
+generateParameterizedParser name params alternatives =
+        funcName ++ " :: " ++ funcType ++ "\n" ++
+        funcName ++ " " ++ paramNames ++ " = " ++ parserDef
+    where
+        funcName = uncapitalize name
+        typeName = capitalize name
+        paramNames = unwords params
+        funcType = concatMap (\p -> "Parser " ++ p ++ " -> ") params ++
+                   "Parser (" ++ typeName ++ " " ++ unwords params ++ ")"
+        parserDef = generateAlternatives (Rule name params alternatives)
+
 -- Generates parser code for all alternatives in a rule
 -- Example: Name: Rule "Expression" Alternatives: [ Alternative [ NonTerminal "term" ], Alternative [ NonTerminal "term", Terminal "+", NonTerminal "expression" ] ] to
 -- "Expression1 <$> term
 --     <|> Expression2 <$> term <*> (string "+") <*> expression"
 generateAlternatives :: Rule -> String
-generateAlternatives (Rule name [alternative@(Alternative elements)]) =
-    if isSingle elements then
+generateAlternatives (Rule name params [alternative@(Alternative elements)]) =
+    if null params && isSingle elements then
         generateNewTypeParser (capitalize name) alternative
     else
         generateAlternativeParser (capitalize name) 1 alternative
 
-generateAlternatives (Rule name (alternative:rest)) =
+generateAlternatives (Rule name params (alternative:rest)) =
     generateAlternativeParser (capitalize name) 1 alternative ++
     concatMap
         (\(i, alt) -> "\n     <|> " ++ generateAlternativeParser (capitalize name) i alt)
@@ -223,12 +272,15 @@ generateAlternatives _ = error "generateAlternatives: Invalid Rule"
 -- number :: Parser Number
 -- number = Number <$> int
 generateParser :: Rule -> String
-generateParser (Rule name alternatives) =
+generateParser rule@(Rule name params alternatives) =
+    if null params then
         uncapitalize name ++ " :: Parser " ++ typeName ++ "\n" ++
         uncapitalize name ++ " = " ++ alts
+    else
+        generateParameterizedParser name params alternatives
     where
         typeName = capitalize name
-        alts = generateAlternatives (Rule name alternatives)
+        alts = generateAlternatives rule
 
 
 -- Generates parser functions for all rules
@@ -311,23 +363,46 @@ macro = do
     "newline" -> NewlineMacro
     _         -> error "Unrecognized macro type"
 
--- Elements consist of nonterminals, terminals, and macros
+-- Elements consist of nonterminals, terminals, macros with modifiers and parameterized types
 element :: Parser Element
-element = inlineSpaces *> (tokElement <|> modifiedElements) <* inlineSpaces   -- discard surrounding spaces and parse the element
+element = inlineSpaces *> elementParser <* inlineSpaces   -- discard surrounding spaces and parse the element
     where
+        elementParser = tokElement <|> regElement
+
         tokElement = do
             _ <- string "tok"                               -- Check for 'tok' modifier BEFORE the element
             _ <- inlineSpaces                               -- Remove any spaces after 'tok'
             elem <- elementTypes
-            return $ Modified TokModifier elem              -- Return the element wrapped in a TokModifier  
+            return $ Modified TokModifier elem              -- Return the element wrapped in a TokModifier
 
-        modifiedElements = do
-            elem <- elementTypes
-            modifier <- optional prependModifiers             -- Then check for an optional modifier
+        regElement = do
+            elem <- paramRef <|> paramCall <|> regElements  -- Parse either a parameter type, parameterized element, or regular element
+            modifier <- optional appendedModifiers             -- Then check for an optional modifier
             case modifier of
                 Nothing -> return elem
                 Just mod -> return $ Modified mod elem
 
+        paramRef = do
+            _ <- is '['                                 -- discard the opening square bracket
+            param <- lower                              -- parse the parameter name
+            _ <- is ']'                                 -- discard the closing square bracket
+            return $ ParameterRef [param]              -- Return as ParameterRef (convert Char to String)
+
+        paramCall = do
+            _ <- is '<'                                 -- discard the opening angle bracket
+            name <- some (alpha <|> digit <|> is '_')   -- parse the name of the nonterminal
+            _ <- is '('                                 -- discard the opening parenthesis
+            args <- argumentList                        -- parse the list of arguments
+            _ <- is ')'                                 -- discard the closing parenthesis
+            _ <- is '>'                                 -- discard the closing angle bracket
+            return $ ParameterizedCall name args
+
+        argumentList = do
+            first <- inlineSpaces *> element <* inlineSpaces
+            rest <- many (is ',' *> inlineSpaces *> element <* inlineSpaces)
+            return (first : rest)
+
+        elementTypes = regElements  -- The basic element types (no modifiers except tok)
         regElements = ntElement <|> tElement <|> mElement  -- Attempts each of the basic element types
         ntElement = NonTerminal <$> nonterminal
         tElement = Terminal <$> terminal
@@ -344,12 +419,33 @@ alternatives = do
     rest <- many (inlineSpaces *> is '|' *> inlineSpaces *> alternative)          -- used many to allow zero or more additional alternatives if more available
     return $ first : rest
 
--- Parse the full rule (<name> ::= <alternatives>)
+-- Parse the full rule (<name> ::= <alternatives>) or parameterized rule (<name(a,b)> ::= <alternatives>)
 rule :: Parser Rule
-rule = do
-  name <- nonterminal                                                 -- Parse <name>
-  _ <- inlineSpaces *> string "::=" <* inlineSpaces                   -- Parse ::= separator
-  Rule name <$> alternatives                                           -- construct Rule using applicative style
+rule = parameterizedRule <|> simpleRule
+    where
+        simpleRule = do
+            name <- nonterminal
+            _ <- inlineSpaces *> string "::=" <* inlineSpaces
+            alts <- alternatives
+            return $ Rule name [] alts
+
+        parameterizedRule = do
+            _ <- is '<'                                         -- discard opening angle bracket
+            name <- some (alpha <|> digit <|> is '_')           -- parse the name
+            _ <- is '('                                         -- discard opening parenthesis
+            params <- paramList
+            _ <- is ')'                                         -- discard closing parenthesis
+            _ <- is '>'                                         -- discard closing angle bracket
+            _ <- inlineSpaces *> string "::=" <* inlineSpaces
+            alts <- alternatives
+            return $ Rule name params alts
+
+        paramList = do
+            _ <- inlineSpaces
+            first <- lower
+            rest <- many (inlineSpaces *> is ',' *> inlineSpaces *> lower)
+            _ <- inlineSpaces
+            return $ map (:[]) (first : rest)
 
   -- Parser for the BNF grammar
 bnfParser :: Parser ADT
@@ -365,10 +461,10 @@ bnfParser = do
 -- | -------------- Modifier Parsers -----------------
 -- | -------------------------------------------------
 -- Attempts to pattern match the next char and returns the appropriate type of Modifier
-prependModifiers :: Parser Modifier
-prependModifiers =
-    (is '*' >> return StarModifier) <|> 
-    (is '+' >> return PlusModifier) <|> 
+appendedModifiers :: Parser Modifier
+appendedModifiers =
+    (is '*' >> return StarModifier) <|>
+    (is '+' >> return PlusModifier) <|>
     (is '?' >> return QuestionModifier)
 
 validate :: ADT -> [String]
