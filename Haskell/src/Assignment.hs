@@ -47,16 +47,6 @@ data Modifier
 data MacroType = IntMacro | StringMacro | NewlineMacro
     deriving (Show)
 
--- Parser for the BNF grammar
-bnfParser :: Parser ADT
-bnfParser = do
-        rules <- many ruleParser    -- Parse multiple rules
-        _ <- spaces                 -- Discard any trailing spaces
-        _ <- eof                    -- Ensure we reach the end of input
-        return $ Grammar rules
-    where
-        ruleParser = spaces *> rule <* spaces   -- Parse a rule with surrounding spaces (or blank)
-
 --------------------------------
 ------- Helper functions -------
 --------------------------------
@@ -82,6 +72,13 @@ elementParser (Terminal s) = "(string " ++ show s ++ ")"
 elementParser (Macro IntMacro) = "int"
 elementParser (Macro StringMacro) = "(some alpha)"
 elementParser (Macro NewlineMacro) = "(is '\\n')"
+elementParser (Modified StarModifier e) = "many (" ++ elementParser e ++ ")"
+elementParser (Modified PlusModifier e) = "some (" ++ elementParser e ++ ")"
+elementParser (Modified QuestionModifier e) = "optional (" ++ elementParser e ++ ")"
+elementParser (Modified TokModifier e) =
+    case e of
+        Terminal s -> "(stringTok " ++ show s ++ ")"    --Example: (Modified TokModifier (Terminal "+")) to (stringTok "+")
+        _ -> "(tok " ++ elementParser e ++ ")"          --Example: (Modified TokModifier (NonTerminal "number")) to (tok number)
 
 -- Gets the Haskell type for a given element
 elementType :: Element -> String
@@ -90,6 +87,10 @@ elementType (Terminal _) = "String"
 elementType (Macro IntMacro) = "Int"
 elementType (Macro StringMacro) = "String"
 elementType (Macro NewlineMacro) = "Char"
+elementType (Modified StarModifier e) = "[" ++ elementType e ++ "]"
+elementType (Modified PlusModifier e) = "[" ++ elementType e ++ "]"
+elementType (Modified QuestionModifier e) = "Maybe (" ++ elementType e ++ ")"
+elementType (Modified TokModifier e) = elementType e
 
 
 ---------------------------------------
@@ -279,7 +280,7 @@ generateHaskellCode (Grammar rules) =
 
 
 -- | -------------------------------------------------
--- | -------------- Custom BNF parsers ---------------
+-- | ----------------- BNF parsers -------------------
 -- | -------------------------------------------------
 
 -- Parses nonterminal expressions e.g. <expr>
@@ -312,15 +313,22 @@ macro = do
 
 -- Elements consist of nonterminals, terminals, and macros
 element :: Parser Element
-element = inlineSpaces *> modifiedElement <* inlineSpaces   -- discard surrounding spaces and parse the element
+element = inlineSpaces *> (tokElement <|> modifiedElements) <* inlineSpaces   -- discard surrounding spaces and parse the element
     where
-        modifiedElement = do
+        tokElement = do
+            _ <- string "tok"                               -- Check for 'tok' modifier BEFORE the element
+            _ <- inlineSpaces                               -- Remove any spaces after 'tok'
             elem <- elementTypes
-            modifier <- optional modifierParser             -- Then check for an optional modifier
+            return $ Modified TokModifier elem              -- Return the element wrapped in a TokModifier  
+
+        modifiedElements = do
+            elem <- elementTypes
+            modifier <- optional prependModifiers             -- Then check for an optional modifier
             case modifier of
                 Nothing -> return elem
                 Just mod -> return $ Modified mod elem
-        elementTypes = ntElement <|> tElement <|> mElement  -- Attempts each of the basic element types
+
+        regElements = ntElement <|> tElement <|> mElement  -- Attempts each of the basic element types
         ntElement = NonTerminal <$> nonterminal
         tElement = Terminal <$> terminal
         mElement = Macro <$> macro
@@ -343,12 +351,22 @@ rule = do
   _ <- inlineSpaces *> string "::=" <* inlineSpaces                   -- Parse ::= separator
   Rule name <$> alternatives                                           -- construct Rule using applicative style
 
+  -- Parser for the BNF grammar
+bnfParser :: Parser ADT
+bnfParser = do
+        rules <- many ruleParser    -- Parse multiple rules
+        _ <- spaces                 -- Discard any trailing spaces
+        _ <- eof                    -- Ensure we reach the end of input
+        return $ Grammar rules
+    where
+        ruleParser = spaces *> rule <* spaces   -- Parse a rule with surrounding spaces (or blank)
+
 -- | -------------------------------------------------
 -- | -------------- Modifier Parsers -----------------
 -- | -------------------------------------------------
 -- Attempts to pattern match the next char and returns the appropriate type of Modifier
-modifierParser :: Parser Modifier
-modifierParser =
+prependModifiers :: Parser Modifier
+prependModifiers =
     (is '*' >> return StarModifier) <|> 
     (is '+' >> return PlusModifier) <|> 
     (is '?' >> return QuestionModifier)
