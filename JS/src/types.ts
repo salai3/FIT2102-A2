@@ -8,4 +8,5 @@ export type State = Readonly<{
     parsers: readonly string[];
     parserOutput: string;
     warnings: readonly string[];
+    saveStatus: string;
 }>;

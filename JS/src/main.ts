@@ -4,7 +4,7 @@ import {
     map,
     merge,
     mergeScan,
-    type Observable,
+    Observable,
 } from "rxjs";
 import { fromFetch } from "rxjs/fetch";
 import type { State } from "./types";
@@ -17,6 +17,7 @@ const stringInput = document.getElementById(
 ) as HTMLTextAreaElement;
 const dropDown = document.getElementById("parserSelect") as HTMLSelectElement;
 const button = document.getElementById("runParser")!;
+const saveButton = document.getElementById("saveButton")!;
 
 type Action = (_: State) => State;
 
@@ -52,6 +53,10 @@ const dropDownStream$: Observable<Action> = fromEvent(dropDown, "change").pipe(
 
 const buttonStream$: Observable<Action> = fromEvent(button, "click").pipe(
     map(() => s => ({ ...s, run: true, resetParsers: false })),
+);
+
+const saveButtonStream$: Observable<Action> = fromEvent(saveButton, "click").pipe(
+    map(() => s => ({ ...s, saveStatus: "Saving..." })),
 );
 
 function getHTML(s: State): Observable<State> {
@@ -91,6 +96,40 @@ function getHTML(s: State): Observable<State> {
     );
 }
 
+function saveFile(s: State): Observable<State> {
+    // If saveStatus is not "Saving...", don't save
+    if (s.saveStatus !== "Saving...") {
+        return new Observable(observer => {
+            observer.next(s);
+            observer.complete();
+        });
+    }
+
+    const body = new URLSearchParams();
+    body.set("grammar", s.grammar);
+
+    return fromFetch<
+        Readonly<
+            | { success: string; message: string }
+            | { error: string }
+        >
+    >("/api/save", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: body.toString(),
+        selector: res => res.json(),
+    }).pipe(
+        map(res => {
+            if ("error" in res) {
+                return { ...s, saveStatus: "Error: " + res.error };
+            }
+            return { ...s, saveStatus: res.message };
+        }),
+    );
+}
+
 const initialState: State = {
     grammar: "",
     string: "",
@@ -101,6 +140,7 @@ const initialState: State = {
     parsers: [],
     parserOutput: "",
     warnings: [],
+    saveStatus: "",
 };
 
 function main() {
@@ -114,15 +154,18 @@ function main() {
     const validateOutput = document.getElementById(
         "validate-output",
     ) as HTMLOutputElement;
+    const saveStatusElement = document.getElementById("save-status")!;
 
     // Subscribe to the input Observable to listen for changes
-    merge(input$, dropDownStream$, stringToParse$, buttonStream$)
+    merge(input$, dropDownStream$, stringToParse$, buttonStream$, saveButtonStream$)
         .pipe(
             mergeScan((acc: State, reducer: Action) => {
                 const newState = reducer(acc);
-                // getHTML returns an observable of length one
-                // so we `scan` and merge the result of getHTML in to our stream
-                return getHTML(newState).pipe(map(resetState));
+                // First apply saveFile, then getHTML
+                // Both return observables of length one
+                return saveFile(newState).pipe(
+                    mergeScan((s: State) => getHTML(s).pipe(map(resetState)), newState)
+                );
             }, initialState),
         )
         .subscribe(state => {
@@ -143,6 +186,7 @@ function main() {
             grammarParseErrorOutput.value = state.grammarParseError;
             parserOutput.value = state.parserOutput;
             validateOutput.value = state.warnings.join("\n");
+            saveStatusElement.textContent = state.saveStatus;
         });
 }
 if (typeof window !== "undefined") {

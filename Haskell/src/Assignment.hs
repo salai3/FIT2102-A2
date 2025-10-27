@@ -1,4 +1,4 @@
-module Assignment (bnfParser, generateHaskellCode, validate, ADT(..), Rule(..), Alternative(..), Element(..), MacroType(..), getTime) where
+module Assignment (bnfParser, generateHaskellCode, validate, ADT(..), Rule(..), Alternative(..), Element(..), MacroType(..), getTime, getFirstParserName, generateHaskellCodeWithTimestamp) where
 
 import Instances (Parser (..))
 import Parser (is, isNot, string, spaces, alpha, digit, eof, inlineSpaces, lower)
@@ -69,6 +69,15 @@ capitalize (x:xs) = toUpper x : xs
 uncapitalize :: String -> String
 uncapitalize "" = ""
 uncapitalize (c:cs) = toLower c : cs
+
+-- Get the name of the first parser (for filename)
+getFirstParserName :: ADT -> String
+getFirstParserName (Grammar []) = "Output"                          --Default name if no rules
+getFirstParserName (Grammar (Rule name _ _ : _)) = uncapitalize name
+
+----------------------------------------------------
+------ Parser and Type Definition Generators -------
+----------------------------------------------------
 
 -- Generates the parser code for a given element
 elementParser :: Element -> String
@@ -466,6 +475,16 @@ appendedModifiers =
     (is '*' >> return StarModifier) <|>
     (is '+' >> return PlusModifier) <|>
     (is '?' >> return QuestionModifier)
+
+-- | -------------------------------------------------
+-- | -------- File output + Save File ----------------
+-- | -------------------------------------------------
+generateHaskellCodeWithTimestamp :: ADT -> IO String
+generateHaskellCodeWithTimestamp adt = do
+    timestamp <- getTime
+    let timestampComment = "-- Generated on: " ++ timestamp ++ "\n\n"
+    let code = generateHaskellCode adt
+    return $ timestampComment ++ code
 
 validate :: ADT -> [String]
 validate _ = ["If i change these function types, I will get a 0 for correctness"]

@@ -5,7 +5,7 @@
 -- compiles it, and runs a selected parser function on a given input string.
 module Main (main) where
 
-import Assignment (bnfParser, generateHaskellCode, validate)
+import Assignment (bnfParser, generateHaskellCode, validate, getFirstParserName, generateHaskellCodeWithTimestamp)
 import Control.Concurrent.QSemN (QSemN, newQSemN, signalQSemN, waitQSemN)
 import Control.Exception (bracket_)
 import Control.Monad.IO.Class (liftIO)
@@ -185,3 +185,37 @@ main = newQSemN 1 >>= \sem -> scotty 3000 $ do
                     , ("result", result)
                     , ("warnings", intercalate "\n" warnings)
                     ]
+
+    post "/api/save" $ do
+        -- Extract POST parameters
+        grammar <- formParam "grammar" :: ActionM Text
+
+        -- Parse BNF grammar
+        case parse bnfParser (unpack grammar) of
+            r@(Error _) -> jsonResponse [("error", show r)]
+            Result _ bnf -> do
+                (saved, message) <- liftIO . withLock sem $ do
+                    -- Generate filename from first parser
+                    let parserName = getFirstParserName bnf
+                    let filename = parserName ++ ".hs"
+                    let filepath = "saved" </> filename
+
+                    -- Create directory if it doesn't exist
+                    createDirectoryIfMissing True "saved"
+
+                    -- Generate code with timestamp
+                    codeWithTimestamp <- generateHaskellCodeWithTimestamp bnf
+
+                    -- Add module declaration and imports
+                    template <- readFile ("template" </> "BNFParser.template")
+                    let fullCode = template ++ "\n" ++ codeWithTimestamp
+
+                    -- Write to file
+                    writeFile filepath fullCode
+
+                    return (True, "File saved as: " ++ filename)
+
+                -- Return success response
+                jsonResponse [("success", show saved), ("message", message)]
+
+
