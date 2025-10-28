@@ -333,11 +333,11 @@ generateParsers rules = unlines (map generateParser rules)
 -- expression = Expression1 <$> number
 --              <|> Expression2 <$> number <*> (string "+") <*> expression
 generateHaskellCode :: ADT -> String
-generateHaskellCode (Grammar rules) = 
-    typeDefs ++ "\n" ++ parserDefs
-    where
+generateHaskellCode adt =
+    let validatedAdt@(Grammar rules) = cleanupGrammar adt
         typeDefs = generateTypes rules
         parserDefs = generateParsers rules
+    in typeDefs ++ "\n" ++ parserDefs
 
 
 -- | -------------------------------------------------
@@ -432,29 +432,19 @@ alternatives = do
 rule :: Parser Rule
 rule = parameterizedRule <|> simpleRule
     where
-        simpleRule = do
-            name <- nonterminal
-            _ <- inlineSpaces *> string "::=" <* inlineSpaces
-            alts <- alternatives
-            return $ Rule name [] alts
+        simpleRule = Rule
+            <$> nonterminal
+            <*> pure []
+            <*> (inlineSpaces *> string "::=" *> inlineSpaces *> alternatives)
 
-        parameterizedRule = do
-            _ <- is '<'                                         -- discard opening angle bracket
-            name <- some (alpha <|> digit <|> is '_')           -- parse the name
-            _ <- is '('                                         -- discard opening parenthesis
-            params <- paramList
-            _ <- is ')'                                         -- discard closing parenthesis
-            _ <- is '>'                                         -- discard closing angle bracket
-            _ <- inlineSpaces *> string "::=" <* inlineSpaces
-            alts <- alternatives
-            return $ Rule name params alts
+        parameterizedRule = Rule
+            <$> (is '<' *> some (alpha <|> digit <|> is '_') <* is '(')
+            <*> (paramList <* is ')' <* is '>')
+            <*> (inlineSpaces *> string "::=" *> inlineSpaces *> alternatives)
 
-        paramList = do
-            _ <- inlineSpaces
-            first <- lower
-            rest <- many (inlineSpaces *> is ',' *> inlineSpaces *> lower)
-            _ <- inlineSpaces
-            return $ map (:[]) (first : rest)
+        paramList = (\first rest -> map (:[]) (first : rest))
+            <$> (inlineSpaces *> lower)
+            <*> (many (inlineSpaces *> is ',' *> inlineSpaces *> lower) <* inlineSpaces)
 
   -- Parser for the BNF grammar
 bnfParser :: Parser ADT
@@ -486,8 +476,115 @@ generateHaskellCodeWithTimestamp adt = do
     let code = generateHaskellCode adt
     return $ timestampComment ++ code
 
+-- | -------------------------------------------------
+-- | -------------- Validation -----------------------
+-- | -------------------------------------------------
+
+-- Get list of all rule names from grammar
+getRuleNames :: ADT -> [String]
+getRuleNames (Grammar rs) = [n | Rule n _ _ <- rs]
+
+-- Extract nonterminals from list of elements
+getNonterminalRefs :: [Element] -> [String]
+getNonterminalRefs elems = [n | NonTerminal n <- elems] ++
+                           concatMap (getNonterminalRefs . (:[])) [e | Modified _ e <- elems] ++
+                           [n | ParameterizedCall n _ <- elems]
+
+-- Get all nonterminals used in a rule
+getRefs :: Rule -> [String]
+getRefs (Rule _ _ alts) = concatMap getRefs' alts
+  where
+    getRefs' (Alternative elems) = getNonterminalRefs elems
+
+-- Find nonterminals that are used but never defined
+findUndefined :: ADT -> [String]
+findUndefined adt@(Grammar rs) =
+    ["Undefined nonterminal: " ++ ref | ref <- used, ref `notElem` defined]
+  where
+    defined = getRuleNames adt
+    used = concatMap getRefs rs
+
+-- Find rules that are defined more than once
+findDuplicates :: ADT -> [String]
+findDuplicates (Grammar rs) = findDups (getRuleNames (Grammar rs))
+  where
+    findDups [] = []
+    findDups (x:xs)
+        | x `elem` xs && x `notElem` findDups xs = ("Duplicate rule: " ++ x) : findDups xs
+        | otherwise = findDups xs
+
+-- Check if rules have left recursion (direct or through cycle)
+findLeftRecursive :: ADT -> [String]
+findLeftRecursive adt@(Grammar rs) =
+    ["Left recursion in: " ++ n | n <- getRuleNames adt, hasLeftRec n]
+  where
+    -- Check if rule is left recursive
+    hasLeftRec :: String -> Bool
+    hasLeftRec start = checkForCycle start [start]
+
+    -- Check if we can reach any visited rule through leftmost nonterminals
+    checkForCycle :: String -> [String] -> Bool
+    checkForCycle curr visited =
+        case lookup curr rulesMap of
+            Nothing -> False
+            Just leftNTs ->
+                any (\nt -> nt `elem` visited || checkForCycle nt (nt:visited)) leftNTs
+
+    -- Map each rule to its leftmost nonterminals
+    rulesMap :: [(String, [String])]
+    rulesMap = [(n, getLeftmost r) | r@(Rule n _ _) <- rs]
+
+    -- Get leftmost nonterminal from each alternative (if it exists)
+    getLeftmost :: Rule -> [String]
+    getLeftmost (Rule _ _ alts) = concatMap getFirst alts
+      where
+        getFirst (Alternative []) = []
+        getFirst (Alternative (NonTerminal nt : _)) = [nt]
+        getFirst (Alternative (ParameterizedCall nt _ : _)) = [nt]
+        getFirst (Alternative (Modified _ e : _)) = getFromElem e
+        getFirst _ = []
+
+        getFromElem (NonTerminal nt) = [nt]
+        getFromElem (ParameterizedCall nt _) = [nt]
+        getFromElem _ = []
+
+-- Remove duplicate rules (keep first occurrence)
+removeDups :: ADT -> ADT
+removeDups (Grammar rs) = Grammar (go [] rs)
+  where
+    go _ [] = []
+    go seen (r@(Rule n _ _):rest)
+        | n `elem` seen = go seen rest
+        | otherwise = r : go (n:seen) rest
+
+-- Remove rules that have issues
+removeInvalid :: ADT -> [String] -> ADT
+removeInvalid (Grammar rs) warns = Grammar (filter ok rs)
+  where
+    ok (Rule n _ _) = not (any (matches n) warns)
+    matches n w = ("Left recursion in: " ++ n) == w || ("Undefined nonterminal: " ++ n) == w
+
+-- Keep validating until there's no more issues to fix
+cleanupGrammar :: ADT -> ADT
+cleanupGrammar adt =
+    let dups = findDuplicates adt
+        noDups = removeDups adt
+        leftRec = findLeftRecursive noDups
+        undef = findUndefined noDups
+        allIssues = leftRec ++ undef
+        cleaned = removeInvalid noDups allIssues
+    in if null allIssues
+       then cleaned
+       else cleanupGrammar cleaned
+
+-- Return warnings from first iteration only
 validate :: ADT -> [String]
-validate _ = ["If i change these function types, I will get a 0 for correctness"]
+validate adt =
+    let dups = findDuplicates adt
+        noDups = removeDups adt  -- need to remove dups first
+        leftRec = findLeftRecursive noDups
+        undef = findUndefined noDups
+    in dups ++ leftRec ++ undef
 
 getTime :: IO String
 getTime = formatTime defaultTimeLocale "%Y-%m-%dT%H-%M-%S" <$> getCurrentTime
