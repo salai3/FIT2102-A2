@@ -123,7 +123,11 @@ elementType (Modified TokModifier e) = elementType e
 -- Parameterization
 elementType (ParameterRef param) = param
 elementType (ParameterizedCall name args) =
-    capitalize name ++ " " ++ unwords (map elementType args)
+    "(" ++ capitalize name ++ " " ++ unwords (map elementTypeArg args) ++ ")"
+  where
+    -- Wrap complex types in parentheses
+    elementTypeArg e@(ParameterizedCall _ _) = "(" ++ elementType e ++ ")"
+    elementTypeArg e = elementType e
 
 
 ---------------------------------------
