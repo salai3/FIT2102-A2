@@ -75,6 +75,16 @@ getFirstParserName :: ADT -> String
 getFirstParserName (Grammar []) = "Output"                          --Default name if no rules
 getFirstParserName (Grammar (Rule name _ _ : _)) = uncapitalize name
 
+sortAlternativesByLength :: [Alternative] -> [Alternative]
+sortAlternativesByLength = foldr insertByLength []
+  where
+    insertByLength alt [] = [alt]
+    insertByLength alt (x:xs)
+        | getLength alt >= getLength x = alt : x : xs
+        | otherwise = x : insertByLength alt xs
+    
+    getLength (Alternative elems) = length elems
+
 ----------------------------------------------------
 ------ Parser and Type Definition Generators -------
 ----------------------------------------------------
@@ -135,7 +145,8 @@ generateConstructor typeName index (Alternative elements) =
 --     deriving Show
 generateData :: Rule -> String
 generateData (Rule name params alts) =
-    case alts of
+    let sortedAlts = sortAlternativesByLength alts  -- Sort alternatives by length (longest first)
+    in case sortedAlts of
         [] -> error "generateData: Invalid Alternatives"
         (first:rest) ->
             "data " ++ typeName ++ typeParams ++ " = " ++ firstConstructor ++ "\n" ++
@@ -269,12 +280,15 @@ generateAlternatives (Rule name params [alternative@(Alternative elements)]) =
     else
         generateAlternativeParser (capitalize name) 1 alternative
 
-generateAlternatives (Rule name params (alternative:rest)) =
-    generateAlternativeParser (capitalize name) 1 alternative ++
-    concatMap
-        (\(i, alt) -> "\n     <|> " ++ generateAlternativeParser (capitalize name) i alt)
-        (zip [2..] rest)
-generateAlternatives _ = error "generateAlternatives: Invalid Rule"
+generateAlternatives (Rule name params alternatives) =
+    let sortedAlts = sortAlternativesByLength alternatives
+    in case sortedAlts of
+        [] -> error "generateAlternatives: No alternatives"
+        (first:rest) ->
+            generateAlternativeParser (capitalize name) 1 first ++
+            concatMap
+                (\(i, alt) -> "\n     <|> " ++ generateAlternativeParser (capitalize name) i alt)
+                (zip [2..] rest)
 
 -- Generates a Haskell parser function for a single rule
 -- Example: Rule "number" [Alternative [Macro IntMacro]] to
