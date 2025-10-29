@@ -119,7 +119,14 @@ elementType (Macro NewlineMacro) = "Char"
 elementType (Modified StarModifier e) = "[" ++ elementType e ++ "]"
 elementType (Modified PlusModifier e) = "[" ++ elementType e ++ "]"
 elementType (Modified QuestionModifier e) = "Maybe " ++ elementType e
-elementType (Modified TokModifier e) = elementType e
+elementType (Modified QuestionModifier e) =
+    case e of
+        Macro IntMacro -> "Maybe Int"
+        Macro StringMacro -> "Maybe String"
+        Macro NewlineMacro -> "Maybe Char"
+        Terminal _ -> "Maybe String"
+        ParameterRef p -> "Maybe " ++ p
+        _ -> "(Maybe " ++ elementType e ++ ")"
 -- Parameterization
 elementType (ParameterRef param) = param
 elementType (ParameterizedCall name args) =
